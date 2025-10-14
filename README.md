@@ -18,12 +18,12 @@
 6. **To exit ground station, send "exit" via spacecraft**.
 
 ## Authors
-###University of Florida
+### University of Florida**<br>
 Henry Harbone<br>
 Rebecca Lee<br>
 Tony Molina<br>
 Bratt Morejon<br>
 Advisor: Cheryl Resch
 
-###National Security Agency
+### National Security Agency**<br>
 Problem Mentor: Ed Zieglar
