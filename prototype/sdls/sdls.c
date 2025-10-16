@@ -117,6 +117,14 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
   // Find the SA associated with GVCID/GMAP_ID
   securityAssociation* sa = FindSA(sa_array, sa_array_size, GVCID, GMAP_ID);
 
+    // Check that the Security Header's SPI is same as found SA
+    uint32_t spi = handleOctetPaddingReceive(tf, sa, 1, 0, 0);
+    if (sa->SPI != spi){
+        printf("SPI mismatch\n");
+        return NULL;
+    }
+    printf("SPI verified\n");
+
   // Initialise return structure
   processSecurityReturn* psr = malloc(sizeof(processSecurityReturn));
   psr->verified = 0;
@@ -151,6 +159,79 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     memcpy(psr->data_field, plaintext, totalLen);
     psr->verified = 1;
   }
+    // If the SA service type is authentication only
+    if (sa->SA_service_type == 0){
+        // Build security header + data_field for authentication data_field
+        size_t auth_len = 2 + sa->SA_length_IV/8 + sa->SA_length_SN/8 + sa->SA_length_PL/8 + strlen(tf->data_field);
+        unsigned char* auth_payload = malloc(auth_len);
+        unsigned char* auth_ptr = auth_payload;
+        memcpy(auth_ptr, tf->sh->SPI, 2);
+        auth_ptr += 2;
+        memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV / 8);
+        auth_ptr += sa->SA_length_IV / 8;
+        memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN / 8);
+        auth_ptr += sa->SA_length_SN / 8;
+        memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL / 8);
+        auth_ptr += sa->SA_length_PL / 8;
+        memcpy(auth_ptr, tf->data_field, strlen(tf->data_field));
+
+        // Apply the bit mask in a bitwise-AND op
+        for (int i = 0; i < auth_len; i++) {
+            auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
+        }
+
+        // Initialise OpenSSL
+        EVP_MAC_CTX* mctx = EVP_MAC_CTX_new(sa->SA_authentication_algorithm);
+
+        // Construct the OSSL parameters for the digest to utilise
+        OSSL_PARAM params[4], *p = params;
+        *p++ = OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256"));
+        *p = OSSL_PARAM_construct_end();
+
+        // Initialise MAC
+        EVP_MAC_init(mctx, sa->SA_authentication_key, strlen((char*)sa->SA_authentication_key), params);
+
+        // Process the data_field data
+        EVP_MAC_update(mctx, auth_payload, auth_len);
+
+        // Gather the MAC's length
+        size_t mac_len;
+        EVP_MAC_final(mctx, NULL, &mac_len, 0);
+
+        // Gather the MAC
+        unsigned char* mac_value = malloc(mac_len);
+        EVP_MAC_final(mctx, mac_value, &mac_len, mac_len);
+
+        // If the MACs match, the data_field is verified
+        if (memcmp(mac_value, tf->st->MAC, sa->SA_length_MAC / 8) == 0) {
+            psr->verified = 1;
+            printf("MAC verified\n");
+        } else {
+            printf("MAC verification failed\n");
+        }
+
+        // Gather the sequence number
+        uint32_t sn = handleOctetPaddingReceive(tf, sa, 0, 1, 0);
+        if (sn > sa->SA_sequence_number) {
+            if (sn - sa->SA_sequence_number <= sa->SA_window_size) {
+                sa->SA_sequence_number = sn;
+                printf("Sequence number verified\n");
+            } else {
+                psr->verified = 0;
+                printf("Sequence number outside window\n");
+            }
+        } else {
+            psr->verified = 0;
+            printf("Sequence number too low\n");
+        }
+
+        // Populate return structure
+        psr->data_field = malloc(data_field_len);
+        memcpy(psr->data_field, tf->data_field, data_field_len);
+
+        // Free memory
+        free(auth_payload);
+    }
 
   // Return the process security return structure
   return psr;
