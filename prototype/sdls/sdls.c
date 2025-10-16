@@ -112,3 +112,46 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
   // Return the transfer frame
   return tf;
 }
+
+processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned int sa_array_size, transferFrame* tf, unsigned int GVCID, unsigned int GMAP_ID) {
+  // Find the SA associated with GVCID/GMAP_ID
+  securityAssociation* sa = FindSA(sa_array, sa_array_size, GVCID, GMAP_ID);
+
+  // Initialise return structure
+  processSecurityReturn* psr = malloc(sizeof(processSecurityReturn));
+  psr->verified = 0;
+  size_t data_field_len = strlen(tf->data_field);
+
+  // If the SA service type is encryption only
+  if (sa->SA_service_type == 1) {
+    // Initialise OpenSSL context and variables
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    int updateLen;
+    int totalLen;
+
+    // Buffer for plaintext
+    unsigned char plaintext[data_field_len];
+
+    // Initialise decryption
+    EVP_DecryptInit_ex(ctx, sa->SA_encryption_algorithm, NULL, sa->SA_encryption_key, sa->SA_initialization_vector);
+
+    // Decrypt the ciphertext
+    EVP_DecryptUpdate(ctx, plaintext, &updateLen, tf->data_field, data_field_len);
+    totalLen = updateLen;
+
+    // Finalise decryption
+    EVP_DecryptFinal_ex(ctx, plaintext + updateLen, &updateLen);
+    totalLen += updateLen;
+
+    // Free context
+    EVP_CIPHER_CTX_free(ctx);
+
+    // Populate return structure
+    psr->data_field = malloc(totalLen);
+    memcpy(psr->data_field, plaintext, totalLen);
+    psr->verified = 1;
+  }
+
+  // Return the process security return structure
+  return psr;
+}
