@@ -286,3 +286,238 @@ bundle* deserializeBundle(const uint8_t* buffer, size_t length) {
     // return the reconstructed bundle
     return b;
 }
+
+// print the bundle information
+void printBundle(bundle* b) {
+    // format the printing of the primary and payload bundle blocks
+    printf("Version: %d\n", b->primary->version);
+    printf("Source EID: %s\n", b->primary->source_eid);
+    printf("Destination EID: %s\n", b->primary->dest_eid);
+    printf("Report-to EID: %s\n", b->primary->report_to_eid);
+    printf("Custodian EID: %s\n", b->primary->custodian_eid);
+    printf("Creation Time: %lu\n", b->primary->creation_timestamp);
+    printf("Sequence Number: %lu\n", b->primary->sequence_number);
+    printf("Lifetime: %lu\n", b->primary->lifetime);
+    printf("Payload (%zu bytes): %.*s\n",
+           b->payload->payload_len,
+           (int)b->payload->payload_len,
+           b->payload->payload);
+}
+
+// clean up memory
+void freeBundle(bundle* b) {
+    // if bundle ptr is NULL, nothing to free
+    if (b == NULL) {
+        return;
+    }
+    // free primary block and all fields
+    if (b->primary) {
+        // free all EID strings
+        free(b->primary->source_eid);
+        free(b->primary->dest_eid);
+        free(b->primary->report_to_eid);
+        free(b->primary->custodian_eid);
+        // free dictionary since it was dynamically allocated
+        free(b->primary->dictionary);
+        // free block itself
+        free(b->primary);
+    }
+    // free payload block and buffer
+    if (b->payload) {
+        // free payload data
+        free(b->payload->payload);
+        // free payload block structure
+        free(b->payload);
+    }
+    // free bundle container
+    free(b);
+}
+
+
+// bundle security (PIB and PCB)
+
+// applies the integrity with PIB and/or the encryption with PCB to the payload
+void applyBundleSecurity(bundle* b, int use_pib, int use_pcb) {
+    if (use_pcb) {
+        // allocate and initialize the PCB
+        b->pcb = malloc(sizeof(bundleSecurityBlock));
+        // block type is 3 for PCB
+        b->pcb->block_type = 3;
+        // no flags
+        b->pcb->proc_flags = 0;
+
+        // generate initialization vector (IV) for AES-GCM
+        // 96-bit IV for GCM
+        unsigned char iv[12];
+        // use random for secure IV
+        RAND_bytes(iv, sizeof(iv));
+
+        // set up AES-256-GCM encryption
+        // create cipher
+        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        // initialize cipher type
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
+        // set IV length
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, sizeof(iv), NULL);
+        // set encryption key and IV
+        EVP_EncryptInit_ex(ctx, NULL, NULL, AES_KEY, iv);
+
+        // encrypt the payload
+        int len;
+        // allocate space for ciphertext and the tag
+        unsigned char* ciphertext = malloc(b->payload->payload_len + 16);
+        // encrypt the payload
+        EVP_EncryptUpdate(ctx, ciphertext, &len, b->payload->payload, b->payload->payload_len);
+        int ciphertext_len = len;
+        // finalize the encryption
+        EVP_EncryptFinal_ex(ctx, ciphertext + len, &len);
+        ciphertext_len += len;
+
+        // extract the authentication tag which is used for checking integrity during decryption
+        unsigned char tag[16];
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, sizeof(tag), tag);
+
+        // store the IV, ciphertext, and tag in the PCB block
+        b->pcb->security_data_len = ciphertext_len + sizeof(tag) + sizeof(iv);
+        b->pcb->security_data = malloc(b->pcb->security_data_len);
+        // IV is first
+        memcpy(b->pcb->security_data, iv, sizeof(iv));
+        // ciphertext next
+        memcpy(b->pcb->security_data + sizeof(iv), ciphertext, ciphertext_len);
+        // tag last
+        memcpy(b->pcb->security_data + sizeof(iv) + ciphertext_len, tag, sizeof(tag));
+        b->pcb->block_length = b->pcb->security_data_len;
+
+        // replace the original payload with the encrypted version
+        free(b->payload->payload);
+        b->payload->payload = malloc(ciphertext_len);
+        memcpy(b->payload->payload, ciphertext, ciphertext_len);
+        b->payload->payload_len = ciphertext_len;
+
+        // clean up the ciphertext
+        free(ciphertext);
+        EVP_CIPHER_CTX_free(ctx);
+    }
+
+    if (use_pib) {
+        // allocate and initialize the PIB
+        b->pib = malloc(sizeof(bundleSecurityBlock));
+        // if block type is 2, PIB
+        b->pib->block_type = 2;
+        // no flags
+        b->pib->proc_flags = 0;
+
+        // compute the HMAC-SHA256 over the payload
+        // fetch the HMAC implementation
+        EVP_MAC* mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+        // create new MAC
+        EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+        OSSL_PARAM params[] = {
+                OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256")),
+                OSSL_PARAM_construct_end()
+        };
+
+        // initialize with the key and digest
+        EVP_MAC_init(ctx, HMAC_KEY, strlen((char*)HMAC_KEY), params);
+        // feed in the payload
+        EVP_MAC_update(ctx, b->payload->payload, b->payload->payload_len);
+
+        // finalize and store the MAC
+        size_t mac_len;
+        // get the output length
+        EVP_MAC_final(ctx, NULL, &mac_len, 0);
+        b->pib->security_data = malloc(mac_len);
+        // write the MAC output
+        EVP_MAC_final(ctx, b->pib->security_data, &mac_len, mac_len);
+        b->pib->security_data_len = mac_len;
+        b->pib->block_length = mac_len;
+
+        // clean up allocated memory
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
+    }
+}
+
+// verifies the integrity and/or decrypts the payload
+int processBundleSecurity(bundle* b, int verify_pib, int decrypt_pcb) {
+    if (verify_pib && b->pib) {
+        // recompute the HMAC over the current payload
+        EVP_MAC* mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+        EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(mac);
+        OSSL_PARAM params[] = {
+                OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256")),
+                OSSL_PARAM_construct_end()
+        };
+
+        EVP_MAC_init(ctx, HMAC_KEY, strlen((char*)HMAC_KEY), params);
+        EVP_MAC_update(ctx, b->payload->payload, b->payload->payload_len);
+
+        // finalize and compare with the stored MAC
+        size_t mac_len;
+        unsigned char* computed_mac = malloc(b->pib->security_data_len);
+        EVP_MAC_final(ctx, computed_mac, &mac_len, b->pib->security_data_len);
+
+        // constant time comparision
+        int verified = memcmp(computed_mac, b->pib->security_data, mac_len) == 0;
+        free(computed_mac);
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(mac);
+
+        // if integrity check fails, MAC verification fails
+        if (!verified) {
+            fprintf(stderr, "[ERROR] MAC verification failed\n");
+            return 0;
+        }
+            // else the MAC is verified
+        else {
+            printf("MAC verified\n");
+        }
+    }
+
+    if (decrypt_pcb && b->pcb) {
+        // extract the IV, ciphertext, and tag from the PCB
+        // first 12 bytes
+        unsigned char* iv = b->pcb->security_data;
+        // after the IV is the ciphertext
+        unsigned char* ciphertext = b->pcb->security_data + 12;
+        // last 16 bytes if the tag
+        unsigned char* tag = b->pcb->security_data + b->pcb->security_data_len - 16;
+        int ciphertext_len = b->pcb->security_data_len - 12 - 16;
+
+        // set up AES-GCM decryption
+        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL);
+        EVP_DecryptInit_ex(ctx, NULL, NULL, AES_KEY, iv);
+
+        // decrypt the ciphertext
+        unsigned char* plaintext = malloc(ciphertext_len);
+        int len;
+        EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len);
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
+
+        // finalize the decryption and verify the tag
+        // if this executes, authentication has failed
+        if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) != 1) {
+            fprintf(stderr, "[ERROR] Decryption failed\n");
+            free(plaintext);
+            EVP_CIPHER_CTX_free(ctx);
+            return 0;
+        }
+
+        // replace the encrypted payload with plaintext
+        int plaintext_len = len + ciphertext_len;
+        free(b->payload->payload);
+        b->payload->payload = malloc(plaintext_len);
+        memcpy(b->payload->payload, plaintext, plaintext_len);
+        b->payload->payload_len = plaintext_len;
+
+        // clean up allocated memory
+        free(plaintext);
+        EVP_CIPHER_CTX_free(ctx);
+        // print a success message
+        printf("Decryption successful\n");
+    }
+
+    return 1;
+}
