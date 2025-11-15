@@ -7,17 +7,21 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
   // Find the appropriate SA
   securityAssociation* sa = FindSA(sa_array, sa_array_size, GVCID, GMAP_ID);
   if (sa == NULL){
-    p_error("No SA was found");
+    printf("[ERROR] No SA was found\n");
+    return NULL;
   }
 
   // Initialise a transfer frame and its security header (ApplySecurity Return)
   transferFrame* tf = malloc(sizeof(transferFrame));
   if (tf == NULL){
-    p_error("Failed to allocate transferFrame");
+    printf("[ERROR] Failed to allocate transferFrame\n");
+    return NULL;
   }
   tf->sh = malloc(sizeof(securityHeader));
   if (tf->sh == NULL){
-    p_error("Failed to allocate securityHeader");
+    printf("[ERROR] Failed to allocate securityHeader\n");
+    free(tf);
+    return NULL;
   }
 
   // If the SA service type is encryption only
@@ -29,7 +33,10 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     // Initialise OpenSSL context and variables
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL){
-      p_error("Failed to initialise OpenSSL context");
+      printf("[ERROR] Failed to initialise OpenSSL context\n");
+      free(tf->sh);
+      free(tf);
+      return NULL;
     }
     int update_len;
     int total_len;
@@ -39,31 +46,48 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
 
     // Initialise encryption
     if (EVP_EncryptInit_ex(ctx, sa->SA_encryption_algorithm, NULL, sa->SA_encryption_key, sa->SA_initialization_vector) != 1){
-      p_error("Failed to initialise encryption");
+      printf("[ERROR] Failed to initialise encryption\n");
+      free(tf->sh);
+      free(tf);
+      EVP_CIPHER_CTX_free(ctx);
+      return NULL;
     }
 
     // Pass the plaintext to the encryption
     if (EVP_EncryptUpdate(ctx, ciphertext, &update_len, plaintext, plaintext_len) != 1){
-      p_error("Failed to update encryption");
+      printf("[ERROR] Failed to update encryption\n");
+      free(tf->sh);
+      free(tf);
+      EVP_CIPHER_CTX_free(ctx);
+      return NULL;
     }
     total_len = update_len;
 
     // Finalise encryption
     if (EVP_EncryptFinal_ex(ctx, ciphertext + update_len, &update_len) != 1){
-      p_error("Failed to finalise encryption");
+      printf("[ERROR] Failed to finalise encryption\n");
+      free(tf->sh);
+      free(tf);
+      EVP_CIPHER_CTX_free(ctx);
+      return NULL; 
     }
     total_len += update_len;
 
     // Free context
     EVP_CIPHER_CTX_free(ctx);
 
-    // Octet-align the security header fields
-    handleOctetPadding(tf, sa, total_len - plaintext_len, 1, 1, 1, 0, NULL);
+    // Populate the Security Header
+    processSPI(tf, sa);
+    processIV(tf, sa, 0);
+    processPL(tf, sa, total_len - plaintext_len);
     
     // Populate data_field
     tf->data_field = malloc(total_len);
     if (tf->data_field == NULL){
-      p_error("Failed to allocate data_field");
+      printf("[ERROR] Failed to allocate data_field\n");
+      free(tf->sh);
+      free(tf);
+      return NULL;
     }
     memcpy(tf->data_field, ciphertext, total_len);
 
@@ -76,9 +100,17 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     printf("Performing authentication only...\n");
     printf("Plaintext provided (%d bytes): \"%s\"\n", plaintext_len, plaintext);
 
-    // Populate security header and data_field
+    // Handle sequence number increment and rollover
+    // TODO: Do we want to do anything with SN rollover?
     sa->SA_sequence_number++;
-    handleOctetPadding(tf, sa, 0, 1, 1, 1, 0, NULL);
+
+    // Populate Security Header
+    processSPI(tf, sa);
+    processSN(tf, sa);
+    // TODO: Make sure that all padding are correct
+    processPL(tf, sa, 0);
+
+    // Populate data_field
     tf->data_field = malloc(plaintext_len);
     if (tf->data_field == NULL){
       p_error("Failed to allocate data_field");
@@ -86,26 +118,22 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     memcpy(tf->data_field, plaintext, plaintext_len);
 
     // Build security header + data_field for authentication data_field
-    size_t auth_len = 2 + sa->SA_length_IV/8 + sa->SA_length_SN/8 + sa->SA_length_PL/8 + plaintext_len;
+    // TODO: Incorporate SPP protocol headers (TM, TC, etc)
+    size_t auth_len = 2 + sa->SA_length_SN + sa->SA_length_PL + plaintext_len;
     unsigned char* auth_payload = malloc(auth_len);
     if (auth_payload == NULL){
       p_error("Failed to allocate auth_payload");
     }
     unsigned char* auth_ptr = auth_payload;
-    memcpy(auth_ptr, tf->sh->SPI, 2);
+    memcpy(auth_ptr, &tf->sh->SPI, 2);
     auth_ptr += 2;
-    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV / 8);
-    auth_ptr += sa->SA_length_IV / 8;
-    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN / 8);
-    auth_ptr += sa->SA_length_SN / 8;
-    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL / 8);
-    auth_ptr += sa->SA_length_PL / 8;
+    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN);
+    auth_ptr += sa->SA_length_SN;
+    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL);
+    auth_ptr += sa->SA_length_PL;
     memcpy(auth_ptr, tf->data_field, plaintext_len);
 
-    // Apply the bit mask in a bitwise-AND op
-    for (int i = 0; i < auth_len; i++) {
-      auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
-    }
+    // Since no IV, not bit mask required. (Until SPP protocol headers are implemented)
 
     // Initialise OpenSSL
     EVP_MAC_CTX* mctx = EVP_MAC_CTX_new(sa->SA_authentication_algorithm);
@@ -115,8 +143,13 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
 
     // Construct the OSSL parameters for the digest to utilise
     OSSL_PARAM params[4], *p = params;
-    // TODO: Change to be dynamic based on algorithm
-    *p++ = OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256"));
+    // If HMAC, get SHA256
+    if (sa->SA_authentication_algorithm == EVP_MAC_fetch(NULL, "HMAC", NULL)){
+      *p++ = OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256"));
+    // IF CMAC, get AES-256-CBC
+    } else {
+      *p++ = OSSL_PARAM_construct_utf8_string("cipher", "AES-256-CBC", strlen("AES-256-GCM"));
+    }
     *p = OSSL_PARAM_construct_end();
 
     // Initialise MAC
@@ -145,11 +178,13 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     }
 
     // Allocate security trailer
-    size_t sa_mac_length = sa->SA_length_MAC/8;
     tf->st = malloc(sizeof(securityTrailer));
     if (tf->st == NULL){
       p_error("Failed to allocate securityTrailer");
     }
+
+    // Allocate MAC
+    size_t sa_mac_length = sa->SA_length_MAC;
     tf->st->MAC = malloc(sa_mac_length);
     if (tf->st->MAC == NULL){
       p_error("Failed to allocate MAC");
@@ -178,26 +213,31 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     printf("Performing authenticated encryption...\n");
     printf("Plaintext provided (%d bytes): \"%s\"\n", plaintext_len, plaintext);
 
-    // Populate security header and data_field
+    // Handle sequence number increment and rollover
     // [TO TEST OUTSIDE WINDOW, MAKE SURE TO DO THE DEBUG ONE ON PROCESSECURITY]
-    sa->SA_sequence_number += 1;
-    handleOctetPadding(tf, sa, 0, 1, 1, 1, 0, NULL);
+    sa->SA_sequence_number++;
+
+    // Populate Security Header
+    processSPI(tf, sa);
+    processIV(tf, sa, 1);
+    processPL(tf, sa, 0);
 
     // Build security header + data_field for authentication data_field
-    size_t auth_len = 2 + sa->SA_length_IV/8 + sa->SA_length_SN/8 + sa->SA_length_PL/8;
+    size_t auth_len = 2 + sa->SA_length_IV + sa->SA_length_PL;
     unsigned char* auth_payload = malloc(auth_len);
     if (auth_payload == NULL){
       p_error("Failed to allocate auth_payload");
     }
     unsigned char* auth_ptr = auth_payload;
-    memcpy(auth_ptr, tf->sh->SPI, 2);
+    memcpy(auth_ptr, &tf->sh->SPI, 2);
     auth_ptr += 2;
-    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV / 8);
-    auth_ptr += sa->SA_length_IV / 8;
-    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN / 8);
-    auth_ptr += sa->SA_length_SN / 8;
-    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL / 8);
-    auth_ptr += sa->SA_length_PL / 8;
+    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV);
+    auth_ptr += sa->SA_length_IV;
+    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL);
+    auth_ptr += sa->SA_length_PL;
+
+    // Apply authentication bit mask
+    applyBitmask(auth_payload, auth_len, sa, 1);
 
     // Initialise OpenSSL context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -213,12 +253,12 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     }
 
     // Change IV length
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, sa->SA_length_IV/8, NULL) != 1){
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, sa->SA_length_IV, NULL) != 1){
       p_error("Failed to set IV length");
     }
 
     // Initialise key and IV
-    if (EVP_EncryptInit_ex(ctx, NULL, NULL, sa->SA_encryption_key, tf->sh->SN) != 1){
+    if (EVP_EncryptInit_ex(ctx, NULL, NULL, sa->SA_encryption_key, tf->sh->IV) != 1){
       p_error("Failed to initialise key and IV");
     }
 
@@ -243,8 +283,8 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     ciphertext_len += len;
 
     // Get the tag
-    unsigned char* tag = malloc(sa->SA_length_MAC/8);
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, sa->SA_length_MAC/8, tag) != 1){
+    unsigned char* tag = malloc(sa->SA_length_MAC);
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, sa->SA_length_MAC, tag) != 1){
       p_error("Failed to get tag");
     }
 
@@ -258,16 +298,28 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     }
     memcpy(tf->data_field, ciphertext, ciphertext_len);
 
-    // Store the tag
+    // Allocate Security Trailer
     tf->st = malloc(sizeof(securityTrailer));
     if (tf->st == NULL){
       p_error("Failed to allocate securityTrailer");
     }
-    tf->st->MAC = malloc(sa->SA_length_MAC/8);
+
+    // Allocate MAC
+    size_t sa_mac_length = sa->SA_length_MAC;
+    tf->st->MAC = malloc(sa_mac_length);
     if (tf->st->MAC == NULL){
       p_error("Failed to allocate MAC");
     }
-    memcpy(tf->st->MAC, tag, sa->SA_length_MAC/8);
+
+    // Handle padding/truncating
+    size_t mac_len = strlen(tag);
+    if (mac_len > sa_mac_length){
+      mac_len = sa_mac_length;
+    }
+    memcpy(tf->st->MAC, tag, mac_len);
+    if (mac_len < sa_mac_length){
+      memset(tf->st->MAC + mac_len, 0x00, sa_mac_length - mac_len);
+    }
 
     // Logging print
     printf("Finished authenticated encryption.\n");
@@ -279,28 +331,30 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
 processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned int sa_array_size, transferFrame* tf, unsigned int GVCID, unsigned int GMAP_ID) {
   printf("ProcessSecurity()...\n");
 
-  // Find the SA associated with GVCID/GMAP_ID
-  securityAssociation* sa = FindSA(sa_array, sa_array_size, GVCID, GMAP_ID);
-
-  // Check that the Security Header's SPI is same as found SA
-  uint32_t spi = handleOctetPaddingReceive(tf, sa, 1, 0, 0);
-  if (sa->SPI != spi){
-    p_error("SPI verification failed");
-  }
-  printf("SPI verified\n");
-
   // Initialise return structure
   processSecurityReturn* psr = malloc(sizeof(processSecurityReturn));
   if (psr == NULL){
     p_error("Failed to allocate processSecurityReturn");
   }
-  psr->verified = 0;
+  psr->verification_status = 0;
   size_t data_field_len = strlen(tf->data_field);
+
+  // Find the SA associated with GVCID/GMAP_ID
+  securityAssociation* sa = FindSA(sa_array, sa_array_size, GVCID, GMAP_ID);
+
+  // Check that the Security Header's SPI is same as found SA
+  if (sa->SPI != tf->sh->SPI){
+    printf("[ERROR] SPI verification failed\n");
+    psr->verification_code = 1;
+    return psr;
+  }
+  printf("SPI verified\n");
 
   // If the SA service type is encryption only
   if (sa->SA_service_type == 1) {
     // Logging print 
     printf("Receiving encryption only...\n");
+
     // Initialise OpenSSL context and variables
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL){
@@ -338,7 +392,8 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
       p_error("Failed to allocate data_field");
     }
     memcpy(psr->data_field, plaintext, totalLen);
-    psr->verified = 1;
+    psr->verification_status = 1;
+    psr->verification_code = 0;
 
     // Logging print
     printf("Finished receiving encryption only.\n");
@@ -349,26 +404,22 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     printf("Receiving authentication only...\n");
 
     // Build security header + data_field for authentication data_field
-    size_t auth_len = 2 + sa->SA_length_IV/8 + sa->SA_length_SN/8 + sa->SA_length_PL/8 + strlen(tf->data_field);
+    // TODO: handle SPP protocol headers
+    size_t auth_len = 2 + sa->SA_length_SN + sa->SA_length_PL + strlen(tf->data_field);
     unsigned char* auth_payload = malloc(auth_len);
     if (auth_payload == NULL){
       p_error("Failed to allocate auth_payload");
     }
     unsigned char* auth_ptr = auth_payload;
-    memcpy(auth_ptr, tf->sh->SPI, 2);
+    memcpy(auth_ptr, &tf->sh->SPI, 2);
     auth_ptr += 2;
-    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV / 8);
-    auth_ptr += sa->SA_length_IV / 8;
-    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN / 8);
-    auth_ptr += sa->SA_length_SN / 8;
-    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL / 8);
-    auth_ptr += sa->SA_length_PL / 8;
-    memcpy(auth_ptr, tf->data_field, strlen(tf->data_field));
+    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN);
+    auth_ptr += sa->SA_length_SN;
+    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL);
+    auth_ptr += sa->SA_length_PL;
+    memcpy(auth_ptr, tf->data_field, data_field_len);
 
-    // Apply the bit mask in a bitwise-AND op
-    for (int i = 0; i < auth_len; i++) {
-      auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
-    }
+    // Since no IV, no bit mask needed (Until SPP protocol headers)
 
     // Initialise OpenSSL
     EVP_MAC_CTX* mctx = EVP_MAC_CTX_new(sa->SA_authentication_algorithm);
@@ -378,7 +429,13 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
 
     // Construct the OSSL parameters for the digest to utilise
     OSSL_PARAM params[4], *p = params;
-    *p++ = OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256"));
+    // If HMAC, get SHA256
+    if (sa->SA_authentication_algorithm == EVP_MAC_fetch(NULL, "HMAC", NULL)){
+      *p++ = OSSL_PARAM_construct_utf8_string("digest", "SHA256", strlen("SHA256"));
+    // IF CMAC, get AES-256-CBC
+    } else {
+      *p++ = OSSL_PARAM_construct_utf8_string("cipher", "AES-256-CBC", strlen("AES-256-GCM"));
+    }
     *p = OSSL_PARAM_construct_end();
 
     // Initialise MAC
@@ -404,36 +461,47 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     }
 
     // If the MACs match, the data_field is verified
-    if (memcmp(mac_value, tf->st->MAC, sa->SA_length_MAC / 8) == 0) {
-      psr->verified = 1;
+    if (memcmp(mac_value, tf->st->MAC, sa->SA_length_MAC) == 0) {
       printf("MAC verified\n");
     } else {
-      p_error("MAC verification failed");
+      printf("[ERROR] MAC verification failed\n");
+      psr->verification_status = 0;
+      psr->verification_code = 2;
+      return psr;
     }
 
     // Gather the sequence number
+    uint64_t sn = receiveSN(tf, sa, 0);
     // TODO: For testing with 1 SA in file, remove after.
     sa->SA_sequence_number--;
-    uint32_t sn = handleOctetPaddingReceive(tf, sa, 0, 1, 0);
+
+    // Check for proper SN
     if (sn > sa->SA_sequence_number) {
       if (sn - sa->SA_sequence_number <= sa->SA_window_size) {
         sa->SA_sequence_number = sn;
         printf("Sequence number verified\n");
       } else {
-        psr->verified = 0;
-        p_error("Sequence number outside window");
+        printf("[ERROR] Sequence number outside window\n");
+        psr->verification_status = 0;
+        psr->verification_code = 3;
+        return psr;
       }
     } else {
-      psr->verified = 0;
-      p_error("Sequence number lower than current one");
+      printf("[ERROR] Sequence number lower than current one\n");
+      psr->verification_status = 0;
+      psr->verification_code = 3;
+      return psr;
     }
 
     // Populate return structure
-    psr->data_field = malloc(data_field_len);
+    psr->data_field = malloc(data_field_len + 1);
     if (psr->data_field == NULL){
       p_error("Failed to allocate data_field");
     }
     memcpy(psr->data_field, tf->data_field, data_field_len);
+    psr->data_field[data_field_len] = '\0';
+    psr->verification_code = 0;
+    psr->verification_status = 1;
 
     // Free memory
     free(auth_payload);
@@ -447,20 +515,22 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     printf("Performing authenticated encryption...\n");
 
     // Build security header + data_field for authentication data_field
-    size_t auth_len = 2 + sa->SA_length_IV/8 + sa->SA_length_SN/8 + sa->SA_length_PL/8;
+    // TODO: handle SPP protocol headers
+    size_t auth_len = 2 + sa->SA_length_IV + sa->SA_length_PL;
     unsigned char* auth_payload = malloc(auth_len);
     if (auth_payload == NULL){
       p_error("Failed to allocate auth_payload");
     }
     unsigned char* auth_ptr = auth_payload;
-    memcpy(auth_ptr, tf->sh->SPI, 2);
+    memcpy(auth_ptr, &tf->sh->SPI, 2);
     auth_ptr += 2;
-    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV / 8);
-    auth_ptr += sa->SA_length_IV / 8;
-    memcpy(auth_ptr, tf->sh->SN, sa->SA_length_SN / 8);
-    auth_ptr += sa->SA_length_SN / 8;
-    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL / 8);
-    auth_ptr += sa->SA_length_PL / 8;
+    memcpy(auth_ptr, tf->sh->IV, sa->SA_length_IV);
+    auth_ptr += sa->SA_length_IV;
+    memcpy(auth_ptr, tf->sh->PL, sa->SA_length_PL);
+    auth_ptr += sa->SA_length_PL;
+
+    // Apply authentication bit mask
+    applyBitmask(auth_payload, auth_len, sa, 1);
 
     // Initialise OpenSSL context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -476,16 +546,13 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
       p_error("Failed to initialise encryption");
     }
 
-    // Construct IV from SN
-    unsigned char* iv = snToIV(tf, sa);
-
     // Change IV length
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, sa->SA_length_IV/8, NULL) != 1){
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, sa->SA_length_IV, NULL) != 1){
       p_error("Failed to set IV length");
     }
 
     // Initialise key and IV
-    if (EVP_DecryptInit_ex(ctx, NULL, NULL, sa->SA_encryption_key, iv) != 1){
+    if (EVP_DecryptInit_ex(ctx, NULL, NULL, sa->SA_encryption_key, tf->sh->IV) != 1){
       p_error("Failed to initialise key and IV");
     }
 
@@ -504,34 +571,44 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     plaintext_len = len;
 
     // Set expected MAC/tag
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, sa->SA_length_MAC/8, tf->st->MAC) != 1){
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, sa->SA_length_MAC, tf->st->MAC) != 1){
       p_error("Failed to set MAC/tag");
     }
 
     // Finalise encryption
     if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) != 1){
-      p_error("MAC verification failed.");
+      printf("[ERROR] MAC verification failed");
+      psr->verification_status = 0;
+      psr->verification_code = 2;
+      return psr;
     }
     printf("MAC verified\n");
-    psr->verified = 1;
     plaintext_len += len;
 
     // Free memory
     EVP_CIPHER_CTX_free(ctx);
 
-    // Check sequence number
+    // Gather the sequence number
+    uint64_t sn = receiveSN(tf, sa, 1);
     // TODO: For testing with 1 SA in file, remove after.
-    sa->SA_sequence_number -= 1;
-    uint32_t sn = handleOctetPaddingReceive(tf, sa, 0, 1, 0);
+    sa->SA_sequence_number--;
+
+    // Check for proper SN
     if (sn > sa->SA_sequence_number) {
-      if (sn - sa->SA_sequence_number <= sa->SA_window_size){
-        printf("Sequence Number verified\n");
+      if (sn - sa->SA_sequence_number <= sa->SA_window_size) {
         sa->SA_sequence_number = sn;
+        printf("Sequence number verified\n");
       } else {
-        p_error("Sequence number outside window");
+        printf("[ERROR] Sequence number outside window\n");
+        psr->verification_status = 0;
+        psr->verification_code = 3;
+        return psr;
       }
     } else {
-      p_error("Sequence number lower than current one");
+      printf("[ERROR] Sequence number lower than current one\n");
+      psr->verification_status = 0;
+      psr->verification_code = 3;
+      return psr;
     }
 
     // Store the ciphertext
@@ -540,6 +617,8 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
       p_error("Failed to allocate data_field");
     }
     memcpy(psr->data_field, plaintext, plaintext_len);
+    psr->verification_status = 1;
+    psr->verification_code = 0;
 
     // Logging print
     printf("Finished authenticated encryption.\n");
@@ -555,14 +634,14 @@ int main(){
   sa->SA_sequence_number = 0;
   sa->SA_encryption_algorithm = EVP_aes_256_gcm();
   sa->SA_encryption_key = (unsigned char*) "01234567890123456789012345678901"; // 256 bit key
-  sa->SA_initialization_vector; // 128 bit IV
-  sa->SA_authentication_mask = 0x45;
+  sa->SA_initialization_vector = (unsigned char*) "0123456700000000";// 128 bit IV
+  sa->SA_authentication_mask = 0x00;
   sa->SA_service_type = 2;
   sa->SA_window_size = 1;
-  sa->SA_length_SN = 32;
-  sa->SA_length_IV = 32;
-  sa->SA_length_PL = 32;
-  sa->SA_length_MAC = 128;
+  sa->SA_length_SN = 8;
+  sa->SA_length_IV = 16;
+  sa->SA_length_PL = 2;
+  sa->SA_length_MAC = 16;
   sa->GVCID = 1;
   sa->GMAP_ID = 1;
 
@@ -571,17 +650,17 @@ int main(){
   // sa->SPI = 1;
   // sa->SA_sequence_number = 0;
   // sa->SA_authentication_algorithm = EVP_MAC_fetch(NULL, "HMAC", NULL);
-  // sa->SA_encryption_algorithm = EVP_aes_256_cbc();
+  // sa->SA_encryption_algorithm = EVP_aes_256_ctr();
   // sa->SA_authentication_key = (unsigned char*) "01234567890123456789012345678901"; // 256 bit key
   // sa->SA_encryption_key = (unsigned char*) "01234567890123456789012345678901"; // 256 bit key
-  // sa->SA_initialization_vector = (unsigned char*) "0123456789012345"; // 128 bit IV
-  // sa->SA_authentication_mask = 0x45;
-  // sa->SA_service_type = 0; // Encryption only
+  // sa->SA_initialization_vector = (unsigned char*) "0123456700000000"; // 128 bit IV
+  // sa->SA_authentication_mask = 0x00;
+  // sa->SA_service_type = 0; 
   // sa->SA_window_size = 1;
-  // sa->SA_length_SN = 32;
-  // sa->SA_length_IV = 256;
-  // sa->SA_length_PL = 32;
-  // sa->SA_length_MAC = 256;
+  // sa->SA_length_SN = 8;
+  // sa->SA_length_IV = 16;
+  // sa->SA_length_PL = 2;
+  // sa->SA_length_MAC = 16;
   // sa->GVCID = 1;
   // sa->GMAP_ID = 1;
 
@@ -605,32 +684,34 @@ int main(){
   printf("\n__Transfer Frame__\n");
   printf("Security Header:\n");
   printf("  SPI: ");
-  BIO_dump_fp (stdout, (const char *)tf->sh->SPI, 2);
-  printf("  IV: ");
-  BIO_dump_fp (stdout, (const char *)tf->sh->IV, sa->SA_length_IV/8);
-  printf("  SN: ");
-  BIO_dump_fp (stdout, (const char *)tf->sh->SN, sa->SA_length_SN/8);
+  BIO_dump_fp (stdout, (const char *)&tf->sh->SPI, 2);
+  if (sa->SA_service_type == 1 || sa->SA_service_type == 2) {
+    printf("  IV: ");
+    BIO_dump_fp (stdout, (const char *)tf->sh->IV, sa->SA_length_IV);
+  }
+  if (sa->SA_service_type == 0) {
+    printf("  SN: ");
+    BIO_dump_fp (stdout, (const char *)tf->sh->SN, sa->SA_length_SN);
+  }
   printf("  PL: ");
-  BIO_dump_fp (stdout, (const char *)tf->sh->PL, sa->SA_length_PL/8);
+  BIO_dump_fp (stdout, (const char *)tf->sh->PL, sa->SA_length_PL);
   printf("Transfer Data Field (%d bytes):\n", strlen(tf->data_field));
   BIO_dump_fp (stdout, (const char *)tf->data_field, strlen(tf->data_field));
   if (sa->SA_service_type == 0 || sa->SA_service_type == 2) {
     printf("Security Trailer:\n");
     printf("  MAC: ");
-    BIO_dump_fp (stdout, (const char *)tf->st->MAC, sa->SA_length_MAC/8);
+    BIO_dump_fp (stdout, (const char *)tf->st->MAC, sa->SA_length_MAC);
   }
   printf("\n");
 
   // Decrypt the ciphertext
   processSecurityReturn* psr = ProcessSecurity(sa_array, 2, tf, 1, 1);
-
-  // Null terminate the decrypted plaintext
-  psr->data_field[strlen(psr->data_field)] = '\0';
   
   // Print the entire ProcessSecurity Return
   printf("\nProcessSecurity Return:\n");
   printf("Decrypted Data Field (%d bytes): %s\n", strlen(psr->data_field), psr->data_field);
-  printf("Verified: %d\n", psr->verified);
+  printf("Verified: %d\n", psr->verification_status);
+  printf("Verification Code: %d\n", psr->verification_code);
 
   // Free memory
   if (sa->SA_service_type == 0){
