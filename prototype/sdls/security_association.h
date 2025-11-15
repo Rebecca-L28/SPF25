@@ -14,9 +14,8 @@
 
 // Security Association structure
 // TODO: Annex A Conformace Met Except:
-//          - TM/TC/AOS/USLP Payloads
-//          - Archival of MAC/SN failure discards
-// TODO: Annex E contains baseline implementations for further testing
+//          - AOS/USLP Payloads (we support TM and TC)
+//          - Archival of MAC/SN failure discards (better to do with client/server)
 typedef struct {
     // Global Virtual Channel ID
     unsigned int GVCID;
@@ -32,6 +31,8 @@ typedef struct {
     uint8_t SA_service_type;
     // Sequence Number length in Security Header
     // Allowed values: 2-8 octets (if used)
+    // In the case of choosing AES-256-GCM, this field signals the length of the SN in the managed IV
+    // Allowed values: 1-length of IV
     uint8_t SA_length_SN;
     // Initialisation Vector length in Security Header
     // Allowed values: 1-32 octets (if used)
@@ -48,7 +49,7 @@ typedef struct {
     EVP_MAC* SA_authentication_algorithm;
     // Value of the authentication key
     unsigned char* SA_authentication_key;
-    // Bit mask for Authentication Payload  TODO: What is the actual (p.40)
+    // Bit mask for Authentication Payload
     uint8_t SA_authentication_mask;
     // Present value of Sequence Number
     // Allowed values: 0-1.8446744e+19
@@ -107,6 +108,6 @@ typedef struct {
     // 1: invalid SPI
     // 2: MAC verification failure
     // 3: anti-replay sequence number failure
-    // 4: padding error
+    // 4: padding error (TODO: what is this?)
     uint8_t verification_code;
 } processSecurityReturn;

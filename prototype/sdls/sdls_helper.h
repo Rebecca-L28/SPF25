@@ -1,11 +1,6 @@
 #pragma once
 #include "security_association.h"
 
-void p_error(unsigned char* msg){
-  printf("[ERROR] %s\n", msg);
-  exit(EXIT_FAILURE);
-}
-
 int processSPI(transferFrame* tf, securityAssociation* sa){
   // Check for tf and sa
   if (tf == NULL){
@@ -126,7 +121,7 @@ uint64_t receiveSN(transferFrame* tf, securityAssociation* sa, uint8_t useIVasSN
   }
 
   // Declare SN
-  uint64_t sn;
+  uint64_t sn = 0;
 
   // If we are using the IV as the SN, copy the IV's section that contains the SN
   if (useIVasSN == 1){
@@ -138,14 +133,67 @@ uint64_t receiveSN(transferFrame* tf, securityAssociation* sa, uint8_t useIVasSN
   return sn;
 }
 
-int applyBitmask(unsigned char* auth_payload, size_t auth_len, securityAssociation* sa, int hasIV){
-  // TODO: Switch indexes and handle the other TF fields of SPP 
-  // Apply the bit mask in a bitwise-AND op
+void applyBitmask(unsigned char* auth_payload, size_t auth_len, securityAssociation* sa, int hasIV, int TM, int TC, int hasTC_SH){
+  // Index variables
+  size_t iv_start = 0;
+  size_t iv_end = 0;
+  size_t tm_secondary_header_len = 0;
+
+  // Parse the indexes if using TM
+  if (TM == 1){
+    // Check for secondary header
+    if (auth_payload[4] & 0x80){
+      // Gather the length
+      tm_secondary_header_len = auth_payload[6] & 0x3F;
+      // Account for the 7th byte that is not counted
+      tm_secondary_header_len++;
+    }
+
+    // Set the start of the IV
+    // 0-5 TM, 6-? TM 2nd Header, +2 SPI, +1 IV
+    iv_start = 5 + tm_secondary_header_len + 3;
+  } else {
+    // IV starts simply after the SPI's 2 bytes
+    iv_start = 2;
+  }
+
+  // Parse the indexes if using TC
+  if (TC == 1){
+    // If the TC has a Segment Header, account for that byte
+    if (hasTC_SH == 1){
+      iv_start = 8;
+    } else {
+      iv_start = 7;
+    }
+  }
+
+  // Set the IV end
+  iv_end = iv_start + sa->SA_length_IV;
+
+  // Apply the bitmask
   for (size_t i = 0; i < auth_len; i++) {
-    // If the auth_payload has an IV, & the bits corresponding to it with 0x00
-    if (hasIV == 1 && i >= 2 && i < 2 + sa->SA_length_IV){
+    // If we have an IV, and we are on those bytes, apply the mask
+    if (hasIV == 1 && i >= iv_start && i < iv_end) {
+        auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
+        continue; 
+    }
+
+    // If we are using the TM protocol, mask everything but the Virtual Channel ID
+    if (TM == 1 && i < iv_start - 2) {
+      if (i == 1) {
+        auth_payload[i] = auth_payload[i] & 0x0E;
+        continue;
+      }
       auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
-      continue;
+    }
+
+    // If we are using the TC protocol, mask everything but the Segment Header
+    if (TC == 1 && i < iv_start - 2){
+      if (i == 5 && hasTC_SH == 1) {
+        auth_payload[i] = auth_payload[i] & 0xFF;
+        continue;
+      }
+      auth_payload[i] = auth_payload[i] & sa->SA_authentication_mask;
     }
   }
 }
@@ -181,3 +229,10 @@ securityAssociation* FindSA(securityAssociation** sa_array, unsigned int sa_arra
   // IF no matching SA were found, then return NULL
   return NULL;
 }
+
+void freeMemory(void* memory[]){
+  for (int i = 0; memory[i] != NULL; i++){
+    free(memory[i]);
+  }
+}
+
