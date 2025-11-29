@@ -18,6 +18,10 @@
 
 
 // define the bundle primary block using the RFC 5050 PDF specs
+// TODO: Implement BAB hop by hop auth, p.13 contains the block values
+// TODO: Implement PIB with all block values, p.15
+// TODO: Implement PCB with all block values, p.16
+// TODO: Implement ESB, p.20 contains the block values
 
 typedef struct {
 
@@ -95,20 +99,88 @@ typedef struct {
     size_t payload_len;
 } bundlePayloadBlock;
 
+// eid-reference list structure
+
+typedef struct {
+    // block security-source, if omitted, the bundle's is assumed
+    char* security_source;
+    // block security-destination, if omitted, the bundle's is assumed
+    char* security_dest;
+} eid_reference_list;
+
+// ciphersuite params structure
+
+typedef struct {
+  // type of parameter
+  // 1: IV
+  // 3: key-information
+  // 4: fragment-range (offset and length as a pair of SDNVs)
+  // 5: integrity signature
+  // 6: unassigned
+  // 7: salt
+  // 8: PCB integrity check value (GCM tag)
+  // 10: encapsulated block
+  // 11: block type of encapsulated block
+  // other values are reserved for future use
+  uint8_t type;
+  // length of parameter value (SDNV)
+  size_t len;
+  // parameter value
+  uint8_t* value;
+} ciphersuite_params;
 
 // bundle security block
 
 typedef struct {
-    // this is the block type, 2 is for PID, 3 is for PCB
+    // TODO: p.9, support all 4 block types and have correct integer
+    // this is the block type, 2 is for BAB, 3 is for PIB, 4 is for PCB, 9 is for ESB (currently 2 PIB, 3 PCB)
     uint8_t block_type;
-    // bundle processing control flags
+    // block processing control flags (SDNV)
+    // --> left to right -->
+    // 6th bit: block contains an eid-reference field
+    // 5th bit: was forwarded without being processed
+    // 4th bit: discard block if it can't be processed
+    // 3rd bit: last block
+    // 2nd bit: delete bundle if block can't be processed
+    // 1st bit: transmit status report if block can't be processed
+    // 0th bit: block must be replicated in every fragment
     uint64_t proc_flags;
-    // this is the block length
+    // eid-reference list (optional)
+    eid_reference_list* eid_reference_list;
+    // this is the block length (SDNV)
     uint64_t block_length;
-    // this is the security data, it will be a MAC tag or ciphertext
-    uint8_t* security_data;
-    // this is the security data length which is the length of the above field
-    size_t security_data_len;
+
+    // ciphersuite ID (SDNV)
+    // 1: BAB
+    // 2: PIB
+    // 3: PCB
+    // 4: ESB
+    uint8_t ciphersuite_id;
+    // ciphersuite flags (SDNV)
+    // --> left to right -->
+    // 6th bit: reserved
+    // 5th bit: reserved
+    // 4th bit: eid security-source is present
+    // 3rd bit: eid security-destination is present
+    // 2nd bit: ciphersuite-params-len and ciphersuite-params are present
+    // 1st bit: correlator is present
+    // 0th bit: sec-result-len and sec-result are present
+    uint8_t ciphersuite_flags;
+    // correlator (SDNV) (optional)
+    uint8_t correlator;
+    // ciphersuite params length (SDNV) (optional)
+    size_t ciphersuite_params_len;
+    // ciphersuite params (optional)
+    ciphersuite_params* ciphersuite_params;
+    // security-result data length (SDNV) (optional)
+    size_t security_result_len;
+    // security-result data
+    uint8_t* security_result;
+
+    // // this is the security data, it will be a MAC tag or ciphertext
+    // uint8_t* security_data;
+    // // this is the security data length which is the length of the above field
+    // size_t security_data_len;
 } bundleSecurityBlock;
 
 
@@ -118,10 +190,16 @@ typedef struct {
 typedef struct {
     // the primary block
     bundlePrimaryBlock* primary;
-    // the payload block
-    bundlePayloadBlock* payload;
+    // bab for authentication
+    bundleSecurityBlock* bab;
     // pib is for integrity
     bundleSecurityBlock* pib;
     // pcb is for encryption and confidentiality
     bundleSecurityBlock* pcb;
+    // the payload block
+    bundlePayloadBlock* payload;
+    // bab 2 for authentication
+    bundleSecurityBlock* bab2;
+    // esb for extra security not related to payload
+    bundleSecurityBlock* esb;
 } bundle;
