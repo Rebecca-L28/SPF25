@@ -6,9 +6,6 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include "bundle.h"
-// for the htonl function
-// converts 32-bit unsigned host long to big-endian
-#include <arpa/inet.h>
 
 // hardcoded HMAC key, 32 bytes
 const unsigned char* HMAC_KEY = (unsigned char*)"01234567890123456789012345678901";
