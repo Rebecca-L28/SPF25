@@ -98,13 +98,14 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     memory[3] = tf->sh->PL;
     
     // Populate data_field
-    tf->data_field = malloc(total_len);
+    tf->data_field = malloc(total_len + 1);
     if (tf->data_field == NULL){
       printf("[ERROR] Failed to allocate data_field\n");
       freeMemory(memory);
       return NULL;
     }
     memcpy(tf->data_field, ciphertext, total_len);
+    tf->data_field[total_len] = '\0';
     memory[4] = tf->data_field;
 
     // Logging print
@@ -140,6 +141,7 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
       return NULL;
     }
     memcpy(tf->data_field, plaintext, plaintext_len);
+    tf->data_field[plaintext_len] = '\0';
     memory[3] = tf->data_field;
 
     // Build security header + data_field for authentication data_field
@@ -407,13 +409,14 @@ transferFrame* ApplySecurity(securityAssociation** sa_array, unsigned int sa_arr
     EVP_CIPHER_CTX_free(ctx);
 
     // Store the ciphertext
-    tf->data_field = malloc(ciphertext_len);
+    tf->data_field = malloc(ciphertext_len + 1);
     if (tf->data_field == NULL){
       printf("[ERROR] Failed to allocate data_field\n]");
       freeMemory(memory);
       return NULL;
     }
     memcpy(tf->data_field, ciphertext, ciphertext_len);
+    tf->data_field[ciphertext_len] = '\0';
     memory[6] = tf->data_field;
 
     // Allocate Security Trailer
@@ -531,7 +534,7 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     EVP_CIPHER_CTX_free(ctx);
 
     // Populate return structure
-    psr->data_field = malloc(totalLen);
+    psr->data_field = malloc(totalLen + 1);
     if (psr->data_field == NULL){
       printf("[ERROR] Failed to allocate data_field\n");
       freeMemory(memory);
@@ -540,6 +543,7 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     memcpy(psr->data_field, plaintext, totalLen);
     psr->verification_status = 1;
     psr->verification_code = 0;
+    psr->data_field[totalLen] = '\0';
 
     // Logging print
     printf("Finished receiving encryption only.\n");
@@ -835,7 +839,7 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     }
 
     // Store the ciphertext
-    psr->data_field = malloc(plaintext_len);
+    psr->data_field = malloc(plaintext_len + 1);
     if (psr->data_field == NULL){
       printf("[ERROR] Failed to allocate data_field");
       freeMemory(memory);
@@ -844,6 +848,7 @@ processSecurityReturn* ProcessSecurity(securityAssociation** sa_array, unsigned 
     memcpy(psr->data_field, plaintext, plaintext_len);
     psr->verification_status = 1;
     psr->verification_code = 0;
+    psr->data_field[plaintext_len] = '\0';
 
     // Free memory
     free(auth_payload);

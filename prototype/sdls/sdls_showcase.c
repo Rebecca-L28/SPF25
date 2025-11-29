@@ -393,7 +393,7 @@ int main(int argc, char* argv[]){
   unsigned char TC_2nd[] = {0xAA, 0xFF, 0xBB, 0xCC, 0x11, 0xDD}; // TC with SH
 
   // Define the default plaintext
-  unsigned char* plaintext = "Shuuniichido Classmate wo Kau Hanashi: Futari no Jikan, Iiwake no Gosen Yen";
+  unsigned char* plaintext = "Cryptographic Protocol Analysis and Verification (v6)";
   size_t plaintext_len = strlen((char*)plaintext);
 
   // Define the security association and arrays
@@ -434,6 +434,7 @@ int main(int argc, char* argv[]){
       plaintext = buffer3;
       buffer3[strcspn(buffer3, "\n")] = '\0';
       plaintext_len = strlen(plaintext);
+      printf("plaintext_len: %d\n", plaintext_len);
     }
 
     // Handle each choice
