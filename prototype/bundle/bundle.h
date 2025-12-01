@@ -1,10 +1,22 @@
 #pragma once
-
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#include <openssl/sha.h>
 
 // SOURCE: https://www.rfc-editor.org/rfc/pdfrfc/rfc5050.txt.pdf
-
+/*
+  NOTE: 
+  Abstracted version of BSP. Core features are present, but more intricate details have been left out.
+  Structures contain most of the fields, but implementation might not use them all.
+  Reason: Time constraints.
+*/
 
 // define the bundle protocol constants
 
@@ -15,16 +27,12 @@
 // define the block type code for the payload block
 // the RFC 5050 PDF says this should always be 1
 #define BLOCK_TYPE_PAYLOAD 1
-
+#define BLOCK_TYPE_BAB 2
+#define BLOCK_TYPE_PIB 3
+#define BLOCK_TYPE_PCB 4
 
 // define the bundle primary block using the RFC 5050 PDF specs
-// TODO: Implement BAB hop by hop auth, p.13 contains the block values
-// TODO: Implement PIB with all block values, p.15
-// TODO: Implement PCB with all block values, p.16
-// TODO: Implement ESB, p.20 contains the block values
-
 typedef struct {
-
     /*
      A 1-byte field indicating the version of the bundle
      protocol that constructed this block.
@@ -79,9 +87,7 @@ typedef struct {
     uint64_t total_adu_length;
 } bundlePrimaryBlock;
 
-
 // define the bundle payload block using the RFC 5050 PDF specs
-
 typedef struct {
     /*
       The Block Type field is a 1-byte field that indicates
@@ -100,7 +106,6 @@ typedef struct {
 } bundlePayloadBlock;
 
 // eid-reference list structure
-
 typedef struct {
     // block security-source, if omitted, the bundle's is assumed
     char* security_source;
@@ -109,7 +114,6 @@ typedef struct {
 } eid_reference_list;
 
 // ciphersuite params structure
-
 typedef struct {
   // type of parameter
   // 1: IV
@@ -130,10 +134,8 @@ typedef struct {
 } ciphersuite_params;
 
 // bundle security block
-
 typedef struct {
-    // TODO: p.9, support all 4 block types and have correct integer
-    // this is the block type, 2 is for BAB, 3 is for PIB, 4 is for PCB, 9 is for ESB (currently 2 PIB, 3 PCB)
+    // this is the block type, 2 is for BAB, 3 is for PIB, 4 is for PCB, 9 is for ESB
     uint8_t block_type;
     // block processing control flags (SDNV)
     // --> left to right -->
@@ -171,22 +173,15 @@ typedef struct {
     // ciphersuite params length (SDNV) (optional)
     size_t ciphersuite_params_len;
     // ciphersuite params (optional)
-    ciphersuite_params* ciphersuite_params;
+    ciphersuite_params* ciphersuite_params[3];
     // security-result data length (SDNV) (optional)
     size_t security_result_len;
     // security-result data
     uint8_t* security_result;
-
-    // // this is the security data, it will be a MAC tag or ciphertext
-    // uint8_t* security_data;
-    // // this is the security data length which is the length of the above field
-    // size_t security_data_len;
 } bundleSecurityBlock;
 
-
-
 // define the full bundle structure
-
+// NOTE: Supports standard order of Encrypt->Sign->BAB at one instance each. ESB is not supported.
 typedef struct {
     // the primary block
     bundlePrimaryBlock* primary;
@@ -198,8 +193,8 @@ typedef struct {
     bundleSecurityBlock* pcb;
     // the payload block
     bundlePayloadBlock* payload;
+    // // esb for extra security not related to payload
+    // bundleSecurityBlock* esb;
     // bab 2 for authentication
     bundleSecurityBlock* bab2;
-    // esb for extra security not related to payload
-    bundleSecurityBlock* esb;
 } bundle;
