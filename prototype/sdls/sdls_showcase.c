@@ -385,6 +385,49 @@ void choice8(unsigned char* plaintext, size_t plaintext_len, unsigned char* SPP,
     free(psr);
 }
 
+void choice9(unsigned char* plaintext, size_t plaintext_len, unsigned char* SPP, securityAssociation* sa, securityAssociation** sa_array){
+    // Setup SA
+    sa->SPI = 1;
+    sa->SA_sequence_number = 0;
+    sa->SA_authentication_algorithm = EVP_MAC_fetch(NULL, "CMAC", NULL);
+    sa->SA_authentication_key = (unsigned char*) "01234567890123456789012345678901"; // 256 bit key
+    sa->SA_authentication_mask = 0x00;
+    sa->SA_service_type = 0; 
+    sa->SA_window_size = 1;
+    sa->SA_length_SN = 4;
+    sa->SA_length_MAC = 16;
+    sa->GVCID = 1;
+    sa->GMAP_ID = 1;
+
+    // ApplySecurity
+    transferFrame* tf = ApplySecurity(sa_array, 2, 1, 1, plaintext, plaintext_len, SPP, sizeof(SPP), 0, 1, 1);
+
+    // Print TF
+    printTF(tf, sa);
+
+    printf("\nTampering with MAC and Ciphertext...\n");
+    plaintext = "Tampered with MAC and Ciphertext";
+    tf = ApplySecurity(sa_array, 2, 1, 1, plaintext, strlen(plaintext), SPP, sizeof(SPP), 0, 1, 1);
+
+    // ProcessSecurity
+    processSecurityReturn* psr = ProcessSecurity(sa_array, 2, tf, 1, 1, SPP, sizeof(SPP), 0, 1, 1);
+
+    // Print PSR
+    printPSR(psr);
+
+    // Free memory
+    free(tf->st->MAC);
+    free(tf->st);
+    free(tf->sh->SN);
+    free(tf->sh);
+    free(tf->data_field);
+    free(tf);
+    if (psr->verification_status == 1){
+        free(psr->data_field);
+    }
+    free(psr);
+}
+
 int main(int argc, char* argv[]){
   // Define the TM and TC headers
   unsigned char TM[] = {0xAA, 0xFF, 0xBB, 0xCC, 0x11, 0xDD}; // TM
@@ -413,6 +456,7 @@ int main(int argc, char* argv[]){
     printf("6. Sequence Number Failure (Too Low/Same)\n");
     printf("7. Sequence Number Failure (Outside Window)\n");
     printf("8. Custom Test (Change in File)\n");
+    printf("9. Successful MAC + Plaintext Tampering\n");
     printf("What to output? ");
 
     // Prompt user for input
@@ -455,6 +499,8 @@ int main(int argc, char* argv[]){
     } else if (strcmp(buffer, "8") == 0){
       // Change SPP to whatever for custom
       choice8(plaintext, plaintext_len, TM_2nd, sa, sa_array);
+    } else if (strcmp(buffer, "9") == 0){
+      choice9(plaintext, plaintext_len, TM_2nd, sa, sa_array);
     }
   
     break;
