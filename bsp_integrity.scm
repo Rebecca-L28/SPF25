@@ -1,54 +1,42 @@
-;; CPSA model for Bundle Security Protocol integrity using abstract PIB tags
+;; CPSA model for Bundle Security Protocol integrity property
+;; Creates a BIB (Bundle Integrity Block)
+;; Uses a secret key with a hash function that will test integrity and authentication
 ;; Rebecca Lee
 
+;; define the protocol called bsp_integrity and use basic algebra
 (defprotocol bsp_integrity basic
 
-  ;; bundle spacaecraft role which sends the payload with the integrity tag
+  ;; spacecraft role that sends the payload with the hash function and secret key
   (defrole spacecraft
-    ;; declare the variables: sc is name of spacecraft, payload is the
-    ;; text(message exchanged), tag is the tag
-    (vars (sc name) (payload text) (tag text))
-    ;; trace is what the role does, sends bundle
+    ;; declare the variables
+    ;; sc is spacecraft name, gs is groundstation name, payload is the payload
+    ;; groundstation name is included so the ltk function can be used
+    ;; it will create a unique key for the spacecraft and groundstation
+    (vars (sc gs name) (payload text))
+    ;; trace is what the role does, sends the payload with the hash and secret key
     (trace
-      (send (cat sc payload tag))))
+      (send (cat sc payload (hash sc payload (ltk sc gs))))
+      )
+    )
 
-  ;; bundle groundstation role which receives the payload and tag
+  ;; groundstation role that receives the payload
   (defrole groundstation
-    ;; declare the variables: sc is name of spacecraft, payload is the
-    ;; text(message exchanged), tag is the tag
-    (vars (sc name) (payload text) (tag text))
-    ;; trace is what the role does, receives bundle
+    ;; declare the variables
+    (vars (sc gs name) (payload text))
+    ;; trace is what the role does, receives payload
     (trace
-      (recv (cat sc payload tag))))
+      (recv (cat sc payload (hash sc payload (ltk sc gs))))
+      )
+    )
+  )
 
-  ;; the observersc role (the adversary) which attempts to receive an altered
-  ;; payload  with the same tag
-  (defrole observersc
-    ;; declare the variables: sc is name of spacecraft, x is the
-    ;; text(message exchanged), tag is the tag
-    (vars (sc name) (x text) (tag text))
-    ;; trace is what the role does, receives the tampered bundle
-    (trace
-      (recv (cat sc x tag))))
-)
-
-;; defining the skeleton which has a valid spacecraft(source) and groundstation(destination) as well as
-;; an attempted tampering by the observer
+;; define the skeleton
 (defskeleton bsp_integrity
-  ;; declare the variables: sc0 is name of spacecraft, payload0 is the
-  ;; text(message exchanged), tag0 is the tag
-  (vars (sc0 name) (payload0 text) (tag0 text))
-
-  ;; valid spacecraft sends the (sc0, payload0, tag0) bundle
-  (defstrand spacecraft 1
-    (sc sc0) (payload payload0) (tag tag0))
-
-  ;; valid groundstation recieves the (sc0, payload0, tag0) bundle
+  ;; declare skeleton variables
+  (vars (sc gs name))
+  ;; define a strand
   (defstrand groundstation 1
-    (sc sc0) (payload payload0) (tag tag0))
-
-  ;; the observer attempts to receive the (sc0, x ≠ payload0, tag0) bundle
-  ;; this tests if CPSA can realize a tampered message with a valid tag
-  (defstrand observersc 1
-    (sc sc0) (x payload0) (tag tag0))
-)
+    (sc sc) (gs gs))
+  ;; the key is a secret and is only known by sc and gs
+  (non-orig (ltk sc gs))
+  )

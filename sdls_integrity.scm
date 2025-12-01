@@ -1,57 +1,41 @@
-;; CPSA model for SDLS integrity, it uses abstract MAC tags
+;; CPSA model for Space Data Link Security integrity property
+;; Creates an HMAC hash with a secret key to test integrity and authentication
 ;; Rebecca Lee
 
-;; defines protocol called sdls_integrity using basic algebra
+;; define the protocol called sdls_integrity and use basic algebra
 (defprotocol sdls_integrity basic
 
-  ;; defines spacescraft role
+  ;; spacecraft role that sends the payload with the hash function and secret key
   (defrole spacecraft
     ;; declare the variables
-    ;; sc is name of spacecraft, message is the message, and tag is the abstracted MAC tag
-    (vars (sc name) (message text) (tag text))
-    ;; trace is what this role actually does, sends identity, message, and tag
+    ;; sc is spacecraft name, gs is groundstation name, payload is the payload
+    ;; groundstation name is included so the ltk function can be used
+    ;; it will create a unique key for the spacecraft and groundstation
+    (vars (sc gs name) (payload text))
+    ;; trace is what the role does, sends the payload with the hash and secret key
     (trace
-      (send (cat sc message tag))))
+      (send (cat sc payload (hash sc payload (ltk sc gs))))
+      )
+    )
 
-  ;; defines groundstation role
+  ;; groundstation role that receives the payload
   (defrole groundstation
     ;; declare the variables
-    ;; sc is name of spacecraft, message is the message, and tag is the abstracted MAC tag
-    (vars (sc name) (message text) (tag text))
-    ;; trace is what this role actually does, recieves identity, message, and tag
+    (vars (sc gs name) (payload text))
+    ;; trace is what the role does, receives payload
     (trace
-      (recv (cat sc message tag))))
-
-  ;; defines listener role (adversary)
-  (defrole listener
-    ;; declare the variables
-    ;; sc is name of spacecraft, x is the message, and tag is the abstracted MAC tag
-    (vars (sc name) (x text) (tag text))
-    ;; trace is what this role actually does
-    ;; recieves identity, x message, and tag
-    ;; the listener is trying to recieve the altered message because SDLS integrity allows for the message to be observed by unauthorized people but it cannot be altered, as the CPSA model will show
-    (trace
-      (recv (cat sc x tag))))
-)
+      (recv (cat sc payload (hash sc payload (ltk sc gs))))
+      )
+    )
+  )
 
 ;; define the skeleton
 (defskeleton sdls_integrity
-  ;; declare variables
-  ;; sc0 is the spacecraft name, msg0 is the message, t0 is the abstracted MAC tag
-  (vars (sc0 name) (msg0 text) (t0 text))
-
-  ;; this strand sends (sc0, msg0, t0)
-  (defstrand spacecraft 1
-    (sc sc0) (message msg0) (tag t0))
-
-  ;; this strand recieves (sc0, msg0, t0)
+  ;; declare skeleton variables
+  (vars (sc gs name))
+  ;; define a strand
   (defstrand groundstation 1
-    (sc sc0) (message msg0) (tag t0))
-
-  ;; this strand attepts to recieve (sc0, msg0, t0)
-  ;; it tests also whether or not the listener can tamper with the message
-  ;; this strand test will test if CPSA can realize a strand where the listener can see a valid MAC tag with a different/tampered with message
-  ;; if CPSA can't it means that the MAC tag is bound to the original message msg0 and integrity holds
-  (defstrand listener 1
-    (sc sc0) (x msg0) (tag t0))
-)
+    (sc sc) (gs gs))
+  ;; the key is a secret and is only known by sc and gs
+  (non-orig (ltk sc gs))
+  )
