@@ -17,14 +17,7 @@
     (vars (sc gs name) (payload text))
     (trace
       ;; groundstation receives (sc, gs, enc(payload, ltk(sc, gs)))
-      (recv (cat sc gs (enc payload (ltk sc gs))))))
-
-  ;; observer role: adversary that sees ciphertext
-  (defrole observer
-    (vars (sc gs name) (leak text))
-    (trace
-      ;; observer receives the encrypted transmission
-      (recv (cat sc gs leak))))
+     (recv (cat sc gs (enc payload (ltk sc gs))))))
 )
 
 ;; skeleton modeling confidentiality
@@ -36,13 +29,8 @@
   (defstrand spacecraft 1
     (sc sc0) (gs gs0) (payload payload0))
 
-  ;; groundstation receives it
-  (defstrand groundstation 1
-    (sc sc0) (gs gs0) (payload payload0))
-
   ;; adversary observes ciphertext
-  (defstrand observer 1
-    (sc sc0) (gs gs0))
+  (deflistener payload0)
 
   ;; assume key is secret (adversary doesn’t know ltk)
   (non-orig (ltk sc0 gs0))
@@ -50,3 +38,4 @@
   ;; mark payload as freshly created, unique to this run
   (uniq-orig payload0)
 )
+

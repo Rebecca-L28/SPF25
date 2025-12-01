@@ -1,58 +1,39 @@
-;; CPSA model for SDLS confidentiality
+;; SDLS confidentiality model
 ;; Henry Harborne
+;; Ground station encrypts a freshly generated payload using the LTK.
+;; Listener tries to learn the raw payload. If confidentiality holds,
+;; CPSA should produce no shapes.
 
-;; defines protocol called sdls_conf using basic algebra
 (defprotocol sdls_conf basic
 
-  ;; defines groundstation role (sender)
-  (defrole groundstation
-    ;; declare the variables
-    ;; a is groundstation, b is spacecraft, message is plaintext data, seq is sequence number
-    (vars (a b name) (message text) (seq text))
-    ;; trace is what this role actually does
-    ;; sends (a, seq, enc(message, ltk(a, b)))
+  ;; ground creates fresh payload & encrypts it under pairwise LTK
+  (defrole ground
+    (vars (sc gs name) (payload text))
     (trace
-      (send (cat a seq (enc message (ltk a b))))))
+      (send (cat sc gs (enc payload (ltk sc gs))))))
 
-  ;; defines spacecraft role (receiver)
-  (defrole spacecraft
-    ;; declare the variables
-    ;; a is groundstation, b is spacecraft, message is plaintext data, seq is sequence number
-    (vars (a b name) (message text) (seq text))
-    ;; trace is what this role actually does
-    ;; receives (a, seq, enc(message, ltk(a, b)))
-    (trace
-      (recv (cat a seq (enc message (ltk a b))))))
-
-  ;; defines listener role (adversary)
+  ;; deaf listener attempts to hear the plaintext payload
   (defrole listener
-    ;; declare the variables
-    ;; a is groundstation, x is plaintext data adversary tries to learn
-    (vars (a name) (x text))
-    ;; trace is what this role actually does
-    ;; receives (a, x)
+    (vars (payload text))
     (trace
-      (recv (cat a x))))
+      (recv payload)))
 )
 
-;; define the skeleton
+;; confidentiality skeleton
 (defskeleton sdls_conf
-  ;; declare variables
-  ;; a0 is groundstation, b0 is spacecraft, msg0 is message, seq0 is sequence number
-  (vars (a0 b0 name) (msg0 text) (seq0 text))
+  (vars (sc0 gs0 name) (payload0 text))
 
-  ;; this strand sends (a0, seq0, enc(msg0, ltk(a0, b0)))
-  (defstrand groundstation 1
-    (a a0) (b b0) (message msg0) (seq seq0))
+  ;; ground creates & transmits the encrypted payload
+  (defstrand ground 1
+    (sc sc0) (gs gs0) (payload payload0))
 
-  ;; this strand receives (a0, seq0, enc(msg0, ltk(a0, b0)))
-  (defstrand spacecraft 1
-    (a a0) (b b0) (message msg0) (seq seq0))
+  ;; adversary tries to learn the plaintext payload
+  (deflistener payload0)
 
-  ;; listener attempts to learn plaintext msg0
-  (defstrand listener 1
-    (a a0) (x msg0))
+  ;; key is secret, intruder cannot derive payload from ciphertext
+  (non-orig (ltk sc0 gs0))
 
-  ;; long-term key between a0 and b0 is uncompromised
-  (non-orig (ltk a0 b0))
+  ;; payload is fresh, so listener should not know it
+  (uniq-orig payload0)
 )
+

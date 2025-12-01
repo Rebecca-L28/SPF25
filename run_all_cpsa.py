@@ -4,6 +4,7 @@ import os
 files = [
     "bsp_integrity",
     "bsp_pib_auth",
+    "bsp_conf",
     "bsp_replay_flawed",
     "bsp_replay_unique",
     "sdls_auth",
