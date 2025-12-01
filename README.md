@@ -1,29 +1,33 @@
 # SPF25
 ## Prototype Usage
-0. **Enter prototype folder**
-1. **Compile the program**
+0. **Enter prototype folder.**
+   ```bash
+    cd ./prototype/
+   ```
+2. **Compile the program.**
     ```bash
     make
     ```
-2. **Start the ground station**:
+3. **Choose whether to test the Bundle Security (BSP) or the Space Data Link Security Protocol (SDLS)**:
+4. **For BSP, simply start the corresponding showcase file**:
     ```bash
-    ./ground_station/ground_station
+    ./bundle/bundle
     ```
-3. **Start the spacecraft**:
+5. **For SDLS, simply start the corresponding showcase file**.
     ```bash
-    ./spacecraft/spacecraft
+    ./sdls/sdls
     ```
-4. **Enter the message when prompted by spacecraft**.
-5. **Ground station will respond and spacecraft will close it's connection**.
-6. **To exit ground station, send "exit" via spacecraft**.
+6. **Follow instructions of the program to begin testing of the protocols.**
+
+SDLS allows for multiple tests in one command execution, while BSP will close itself after running a test. Both allow for custom tests that can be in found in either ```./sdls/sdls_showcase.c``` or ```./bundle/bundle.c``` in ```choice8()``` and ```choice7()``` respectively, if more specific testing wants to be accomplished.
 
 ## Authors
-### University of Florida**<br>
+### University of Florida<br>
 Henry Harbone<br>
 Rebecca Lee<br>
 Tony Molina<br>
 Bratt Morejon<br>
 Advisor: Cheryl Resch
 
-### National Security Agency**<br>
+### National Security Agency<br>
 Problem Mentor: Ed Zieglar
