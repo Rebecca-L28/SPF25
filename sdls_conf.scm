@@ -12,11 +12,6 @@
     (trace
       (send (cat sc gs (enc payload (ltk sc gs))))))
 
-  ;; deaf listener attempts to hear the plaintext payload
-  (defrole listener
-    (vars (payload text))
-    (trace
-      (recv payload)))
 )
 
 ;; confidentiality skeleton

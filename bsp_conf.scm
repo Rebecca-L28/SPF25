@@ -11,13 +11,6 @@
     (trace
       ;; spacecraft sends (sc, gs, enc(payload, ltk(sc, gs)))
       (send (cat sc gs (enc payload (ltk sc gs))))))
-
-  ;; groundstation role: receives and decrypts
-  (defrole groundstation
-    (vars (sc gs name) (payload text))
-    (trace
-      ;; groundstation receives (sc, gs, enc(payload, ltk(sc, gs)))
-     (recv (cat sc gs (enc payload (ltk sc gs))))))
 )
 
 ;; skeleton modeling confidentiality
