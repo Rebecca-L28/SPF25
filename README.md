@@ -6,11 +6,15 @@
     cabal update
     cabal install cpsa
     ```
-4. **Compile the models**
+4. **Compile the models with**
     ```bash
     echo build | ghci Make4.hs
     ```
-5. **The output will be in an .xhtml file such as sdls_replay.xhtml**
+    OR
+   ```bash
+   python3 run_all_cpsa.py
+   ```
+6. **The output will be in an .xhtml file such as sdls_replay.xhtml**
 
 ## Authors
 ### University of Florida
