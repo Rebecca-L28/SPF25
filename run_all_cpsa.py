@@ -5,12 +5,17 @@ files = [
     "bsp_integrity",
     "bsp_pib_auth",
     "bsp_conf",
-    "bsp_replay_flawed",
-    "bsp_replay_unique",
+    "bsp_replay_pcb",
+    "bsp_replay_bab",
+    "bsp_replay_pib",
+    "bsp_replay_pcb_sdls_approach",
+    "bsp_replay_pib_sdls_approach",
+    "bsp_replay_bab_sdls_approach",
     "sdls_auth",
     "sdls_conf",
     "sdls_integrity",
-    "sdls_replay"
+    "sdls_replay_aead",
+    "sdls_replay_auth_only"
 ]
 
 def run_cpsa_pipeline(file):
